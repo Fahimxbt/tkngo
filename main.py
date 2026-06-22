@@ -35,25 +35,21 @@ self_match_detected = False
 match_start_time = 0
 
 # Timeout protection
-PARTNER_SEARCH_TIMEOUT = 45  # seconds - increased for low activity
+PARTNER_SEARCH_TIMEOUT = 45
 last_search_start_time = 0
 search_timeout_task = None
 
 # ANTI-SELF-MATCH settings
-STAGGER_GAP = 8  # 8s gap between bots
-MIN_PARTNER_INTERVAL = STAGGER_GAP * 10 + 10  # 90s for all bots
+STAGGER_GAP = 8
+MIN_PARTNER_INTERVAL = STAGGER_GAP * 10 + 10
 last_partner_time = 0
 
-# Track recently skipped partners to avoid re-matching
-recent_partners = set()
-RECENT_PARTNER_TIMEOUT = 120  # Don't rematch same signature for 2 min
-
-# Our promo signatures to detect self-matches
+# Our exact promo signatures (lowercase for comparison)
 PROMO_TEXT = "can you believe what i just saw here"
 HEYYY_TEXT = "heyyy"
 
 # Stuck detection
-STUCK_TIMEOUT = 90  # If match lasts longer than 90s, force next
+STUCK_TIMEOUT = 90
 stuck_watchdog_task = None
 
 
@@ -107,7 +103,7 @@ async def find_messages():
             if m.sticker and not sticker_msg_id:
                 sticker_msg_id = m.id
                 print("[+] Sticker found!")
-            if m.text and m.text.lower() == 'heyyy' and not heyyy_msg_id:
+            if m.text and m.text.lower() == HEYYY_TEXT and not heyyy_msg_id:
                 heyyy_msg_id = m.id
                 print("[+] 'heyyy' message found!")
 
@@ -123,7 +119,6 @@ async def find_messages():
 
 
 async def dismiss_rating():
-    """Click Like or Dislike to dismiss the rating screen."""
     try:
         msgs = await client.get_messages(bot_entity, limit=5)
         for m in msgs:
@@ -143,7 +138,6 @@ async def dismiss_rating():
 
 
 async def click_yes_skip():
-    """Click 'Yes, Skip' button if skip confirmation appears."""
     try:
         msgs = await client.get_messages(bot_entity, limit=5)
         for m in msgs:
@@ -163,12 +157,10 @@ async def click_yes_skip():
 
 
 async def force_end_chat():
-    """Force end current chat by sending /end."""
     try:
         await safe_send_message(bot_entity, '/end')
         print("[→] /end sent to force close chat")
         await asyncio.sleep(2)
-        # Try to click Yes, Skip if confirmation appears
         await click_yes_skip()
         return True
     except Exception as e:
@@ -185,7 +177,6 @@ async def click_next():
         return True
 
     async with finding_lock:
-        # Cancel any existing timeout tasks
         if search_timeout_task and not search_timeout_task.done():
             search_timeout_task.cancel()
             try:
@@ -252,7 +243,6 @@ async def click_next():
 
 
 async def search_timeout_watchdog():
-    """If no partner found within PARTNER_SEARCH_TIMEOUT seconds, retry."""
     global waiting_for_partner
     try:
         await asyncio.sleep(PARTNER_SEARCH_TIMEOUT)
@@ -270,7 +260,6 @@ async def search_timeout_watchdog():
 
 
 async def stuck_watchdog():
-    """If match is stuck for too long, force end and next."""
     global match_active, promo_sent
     try:
         await asyncio.sleep(STUCK_TIMEOUT)
@@ -301,7 +290,7 @@ async def send_promo():
         print("[*] Starting promo sequence...")
 
         try:
-            # Step 1: Send "heyyy" immediately
+            # Step 1: Send "heyyy" IMMEDIATELY
             if promo_cancelled:
                 print("[!] Promo cancelled before heyyy")
                 return
@@ -313,11 +302,9 @@ async def send_promo():
                 await safe_send_message(bot_entity, "heyyy")
                 print("[+] Sent: heyyy")
 
-            # Wait 3 seconds + random jitter
-            jitter = random.uniform(0, 2)
-            wait_time = 3 + jitter
-            print(f"[*] Waiting {wait_time:.1f} seconds...")
-            await asyncio.sleep(wait_time)
+            # Wait 4 seconds
+            print("[*] Waiting 4 seconds...")
+            await asyncio.sleep(4)
 
             # Step 2: Send "Can you believe what I just saw here"
             if promo_cancelled:
@@ -327,11 +314,9 @@ async def send_promo():
             await safe_send_message(bot_entity, "Can you believe what I just saw here")
             print("[+] Sent: Can you believe what I just saw here")
 
-            # Wait 4 seconds + random jitter
-            jitter = random.uniform(0, 2)
-            wait_time = 4 + jitter
-            print(f"[*] Waiting {wait_time:.1f} seconds...")
-            await asyncio.sleep(wait_time)
+            # Wait 3 seconds
+            print("[*] Waiting 3 seconds...")
+            await asyncio.sleep(3)
 
             # Step 3: Forward sticker
             if promo_cancelled:
@@ -346,10 +331,8 @@ async def send_promo():
                 print("[+] Text promo sent!")
 
             # Wait 8 seconds after sticker before going next
-            jitter = random.uniform(0, 2)
-            wait_time = 8 + jitter
-            print(f"[*] Waiting {wait_time:.1f} seconds after sticker...")
-            await asyncio.sleep(wait_time)
+            print("[*] Waiting 8 seconds after sticker...")
+            await asyncio.sleep(8)
 
             promo_sent = True
             print("[✓] Promo complete, proceeding to next...")
@@ -360,12 +343,12 @@ async def send_promo():
 
 
 async def handle_self_match():
-    """Handle self-match detection - skip immediately."""
     global match_active, promo_sent, self_match_detected
     print("[!] Handling self-match skip...")
     self_match_detected = True
 
     if sending_lock.locked():
+        global promo_cancelled
         promo_cancelled = True
         for _ in range(100):
             if not sending_lock.locked():
@@ -384,7 +367,7 @@ async def handle_self_match():
 async def handler(event):
     global match_active, promo_sent, promo_cancelled, waiting_for_partner
     global search_timeout_task, stuck_watchdog_task, self_match_detected
-    global match_start_time, recent_partners
+    global match_start_time
 
     text = event.text or ''
     text_lower = text.lower()
@@ -392,22 +375,18 @@ async def handler(event):
     if event.out:
         return
 
-    # ========== ANTI-SELF-MATCH: Detect if partner is another bot ==========
+    # ========== ANTI-SELF-MATCH: Only detect OUR exact promo sequence ==========
+    # A random user sending "Heyyyy" or "hi" should NOT trigger this
+    # Only trigger if partner sends the EXACT believe text OR sticker before we send ours
     if match_active and not event.out and not promo_sent:
-        # If partner sends heyyy immediately on connect = 99% our bot
-        if HEYYY_TEXT in text_lower and (time.time() - match_start_time) < 10:
-            print("[!] SELF-MATCH DETECTED: Partner sent 'heyyy' within 10s of connect!")
+        # If partner sends our exact promo text = 100% our bot
+        if text_lower == PROMO_TEXT:
+            print("[!] SELF-MATCH DETECTED: Partner sent our exact promo text!")
             await handle_self_match()
             return
 
-        # If partner sends our promo text
-        if PROMO_TEXT in text_lower:
-            print("[!] SELF-MATCH DETECTED: Partner sent our promo text!")
-            await handle_self_match()
-            return
-
-        # If partner sends sticker before we do
-        if event.message.sticker and not promo_sent:
+        # If partner sends sticker before we do = likely our bot
+        if event.message.sticker:
             print("[!] SELF-MATCH DETECTED: Partner sent sticker before us!")
             await handle_self_match()
             return
@@ -462,17 +441,8 @@ async def handler(event):
         # Start stuck watchdog
         stuck_watchdog_task = asyncio.create_task(stuck_watchdog())
 
-        # DECOY DELAY: Wait random 5-15s before sending heyyy to desync bots
-        # This ensures if 2 bots match, they won't send at exact same time
-        decoy_delay = random.uniform(5, 15)
-        print(f"[*] Decoy delay: waiting {decoy_delay:.1f}s before promo...")
-        await asyncio.sleep(decoy_delay)
-
-        # Check if self-match was detected during decoy delay
-        if self_match_detected or not match_active:
-            print("[!] Self-match detected during decoy, aborting promo")
-            return
-
+        # Send heyyy IMMEDIATELY - no decoy delay
+        await asyncio.sleep(1)  # Small 1s buffer for bot to stabilize
         await send_promo()
 
         if not promo_cancelled and not self_match_detected:
@@ -510,7 +480,8 @@ async def main():
     await client.start()
     print(f"[*] ChatBuddy bot (@TalkNGoBot) started! BOT_ID={BOT_ID}")
     print(f"[*] STAGGER_GAP={STAGGER_GAP}s | MIN_PARTNER_INTERVAL={MIN_PARTNER_INTERVAL}s")
-    print(f"[*] STUCK_TIMEOUT={STUCK_TIMEOUT}s | DECOY_DELAY=5-15s")
+    print(f"[*] STUCK_TIMEOUT={STUCK_TIMEOUT}s")
+    print("[*] Flow: heyyy → 4s → believe → 3s → sticker → 8s → Next")
     print("[*] Connected to Telegram successfully!")
 
     bot_entity = await client.get_entity('@TalkNGoBot')
