@@ -3,15 +3,12 @@ from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 import asyncio
 import os
-import sys
-import random
 import time
 
 # ========== CONFIG FROM ENVIRONMENT VARIABLES ==========
 STRING_SESSION = os.environ.get('STRING_SESSION', '')
 API_ID = int(os.environ.get('API_ID', '0'))
 API_HASH = os.environ.get('API_HASH', '')
-BOT_ID = int(os.environ.get('BOT_ID', '1'))
 # ========================================================
 
 if not STRING_SESSION or not API_ID or not API_HASH:
@@ -28,28 +25,6 @@ heyyy_msg_id = None
 match_active = False
 promo_sent = False
 sending_lock = asyncio.Lock()
-promo_cancelled = False
-finding_lock = asyncio.Lock()
-waiting_for_partner = False
-self_match_detected = False
-match_start_time = 0
-
-# Timeout protection
-PARTNER_SEARCH_TIMEOUT = 45
-last_search_start_time = 0
-search_timeout_task = None
-
-# ANTI-SELF-MATCH settings
-STAGGER_GAP = 8
-MIN_PARTNER_INTERVAL = STAGGER_GAP * 10 + 10
-last_partner_time = 0
-
-# Our exact promo signatures (lowercase for comparison)
-PROMO_TEXT = "can you believe what i just saw here"
-
-# Stuck detection
-STUCK_TIMEOUT = 90
-stuck_watchdog_task = None
 
 
 async def safe_send_message(entity, message, retries=3):
@@ -117,183 +92,53 @@ async def find_messages():
     return False
 
 
-async def dismiss_rating():
-    try:
-        msgs = await client.get_messages(bot_entity, limit=5)
-        for m in msgs:
-            if m.reply_markup and m.reply_markup.rows:
-                for row in m.reply_markup.rows:
-                    for btn in row.buttons:
-                        btn_text = btn.text or ''
-                        if 'like' in btn_text.lower() or 'dislike' in btn_text.lower():
-                            result = await safe_click(m, btn.text)
-                            if result:
-                                print(f"[→] Rating dismissed: {btn_text}")
-                                await asyncio.sleep(2)
-                                return True
-    except Exception as e:
-        print(f"[!] Dismiss rating error: {e}")
-    return False
-
-
-async def click_yes_skip():
-    try:
-        msgs = await client.get_messages(bot_entity, limit=5)
-        for m in msgs:
-            if m.reply_markup and m.reply_markup.rows:
-                for row in m.reply_markup.rows:
-                    for btn in row.buttons:
-                        btn_text = btn.text or ''
-                        if 'yes, skip' in btn_text.lower() or 'skip' in btn_text.lower():
-                            result = await safe_click(m, btn.text)
-                            if result:
-                                print(f"[→] Skip confirmed: {btn_text}")
-                                await asyncio.sleep(2)
-                                return True
-    except Exception as e:
-        print(f"[!] Yes Skip error: {e}")
-    return False
-
-
-async def force_end_chat():
-    try:
-        await safe_send_message(bot_entity, '/end')
-        print("[→] /end sent to force close chat")
-        await asyncio.sleep(2)
-        await click_yes_skip()
-        return True
-    except Exception as e:
-        print(f"[!] Force end error: {e}")
-    return False
-
-
 async def click_next():
-    global match_active, promo_sent, last_partner_time, waiting_for_partner
-    global last_search_start_time, search_timeout_task, stuck_watchdog_task
-
-    if finding_lock.locked():
-        print("[*] Already finding partner, skipping...")
-        return True
-
-    async with finding_lock:
-        if search_timeout_task and not search_timeout_task.done():
-            search_timeout_task.cancel()
-            try:
-                await search_timeout_task
-            except asyncio.CancelledError:
-                pass
-        if stuck_watchdog_task and not stuck_watchdog_task.done():
-            stuck_watchdog_task.cancel()
-            try:
-                await stuck_watchdog_task
-            except asyncio.CancelledError:
-                pass
-
-        # ANTI-SELF-MATCH: Staggered delay based on BOT_ID
-        base_delay = (BOT_ID - 1) * STAGGER_GAP
-        random_delay = random.uniform(0, 3)
-        total_delay = base_delay + random_delay
-        print(f"[*] Anti-self-match: waiting {total_delay:.1f}s before clicking (bot_id={BOT_ID})...")
-        await asyncio.sleep(total_delay)
-
-        elapsed = asyncio.get_event_loop().time() - last_partner_time
-        if elapsed < MIN_PARTNER_INTERVAL:
-            wait = MIN_PARTNER_INTERVAL - elapsed
-            print(f"[*] Rate limit: waiting {wait:.1f}s before next search...")
-            await asyncio.sleep(wait)
-
-        print("[*] Looking for Next button...")
-
-        try:
-            msgs = await client.get_messages(bot_entity, limit=10)
-            for m in msgs:
-                if m.reply_markup:
-                    for row in m.reply_markup.rows:
-                        for btn in row.buttons:
-                            btn_text = btn.text or ''
-                            if 'Next' in btn_text:
-                                result = await safe_click(m, btn.text)
-                                if result:
-                                    print("[→] Next clicked")
-                                    await asyncio.sleep(2)
-                                    await click_yes_skip()
-                                    match_active = False
-                                    promo_sent = False
-                                    waiting_for_partner = True
-                                    last_partner_time = asyncio.get_event_loop().time()
-                                    last_search_start_time = asyncio.get_event_loop().time()
-                                    search_timeout_task = asyncio.create_task(search_timeout_watchdog())
-                                    await asyncio.sleep(3)
-                                    return True
-        except Exception as e:
-            print(f"[!] get_messages error: {e}")
-
-        print("[!] Next button not found, using /next fallback")
-        await safe_send_message(bot_entity, '/next')
-        print("[→] /next sent (fallback)")
-        match_active = False
-        promo_sent = False
-        waiting_for_partner = True
-        last_partner_time = asyncio.get_event_loop().time()
-        last_search_start_time = asyncio.get_event_loop().time()
-        search_timeout_task = asyncio.create_task(search_timeout_watchdog())
-        await asyncio.sleep(3)
-        return True
-
-
-async def search_timeout_watchdog():
-    global waiting_for_partner
+    print("[*] Looking for Next button...")
     try:
-        await asyncio.sleep(PARTNER_SEARCH_TIMEOUT)
-        if waiting_for_partner and not match_active:
-            print(f"[!] Timeout: No partner found in {PARTNER_SEARCH_TIMEOUT}s, retrying...")
-            await dismiss_rating()
-            await safe_send_message(bot_entity, '/next')
-            print("[→] /next sent (timeout retry)")
-            last_search_start_time = asyncio.get_event_loop().time()
-            asyncio.create_task(search_timeout_watchdog())
-    except asyncio.CancelledError:
-        pass
+        msgs = await client.get_messages(bot_entity, limit=10)
+        for m in msgs:
+            if m.reply_markup:
+                for row in m.reply_markup.rows:
+                    for btn in row.buttons:
+                        if 'Next' in btn.text:
+                            result = await safe_click(m, btn.text)
+                            if result:
+                                print("[→] Next clicked")
+                                await asyncio.sleep(2)
+                                # Click Yes, Skip if confirmation appears
+                                msgs2 = await client.get_messages(bot_entity, limit=5)
+                                for m2 in msgs2:
+                                    if m2.reply_markup:
+                                        for row2 in m2.reply_markup.rows:
+                                            for btn2 in row2.buttons:
+                                                if 'yes' in btn2.text.lower() and 'skip' in btn2.text.lower():
+                                                    await safe_click(m2, btn2.text)
+                                                    print(f"[→] Skip confirmed: {btn2.text}")
+                                                    await asyncio.sleep(2)
+                                                    break
+                                await asyncio.sleep(3)
+                                return True
     except Exception as e:
-        print(f"[!] Watchdog error: {e}")
+        print(f"[!] get_messages error: {e}")
 
-
-async def stuck_watchdog():
-    global match_active, promo_sent
-    try:
-        await asyncio.sleep(STUCK_TIMEOUT)
-        if match_active:
-            elapsed = time.time() - match_start_time
-            if elapsed >= STUCK_TIMEOUT:
-                print(f"[!] STUCK DETECTED: Match active for {elapsed:.0f}s, forcing next...")
-                match_active = False
-                promo_sent = False
-                await force_end_chat()
-                await asyncio.sleep(3)
-                await click_next()
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        print(f"[!] Stuck watchdog error: {e}")
+    print("[!] Next button not found, using /next fallback")
+    await safe_send_message(bot_entity, '/next')
+    print("[→] /next sent")
+    await asyncio.sleep(3)
+    return True
 
 
 async def send_promo():
-    global promo_sent, promo_cancelled
+    global promo_sent
 
     if sending_lock.locked() or promo_sent:
-        print("[*] Already sending or already sent, skipping...")
         return
 
     async with sending_lock:
-        promo_cancelled = False
         print("[*] Starting promo sequence...")
 
         try:
-            # Step 1: Send "heyyy" IMMEDIATELY
-            if promo_cancelled:
-                print("[!] Promo cancelled before heyyy")
-                return
-
+            # Step 1: Send "heyyy" immediately
             if heyyy_msg_id:
                 await safe_forward_messages(bot_entity, heyyy_msg_id, 'me')
                 print("[+] Forwarded: heyyy")
@@ -301,41 +146,23 @@ async def send_promo():
                 await safe_send_message(bot_entity, "heyyy")
                 print("[+] Sent: heyyy")
 
-            # Wait 4 seconds - CHECK match_active after each second
-            print("[*] Waiting 4 seconds...")
-            for _ in range(4):
-                if not match_active or promo_cancelled:
-                    print("[!] Match ended during heyyy wait, aborting promo")
-                    return
-                await asyncio.sleep(1)
+            # Wait 4 seconds
+            await asyncio.sleep(4)
 
             # Step 2: Send "Can you believe what I just saw here"
-            if promo_cancelled:
-                print("[!] Promo cancelled before believe message")
-                return
-
             if not match_active:
-                print("[!] Match ended, aborting promo")
+                print("[!] Match ended, aborting")
                 return
 
             await safe_send_message(bot_entity, "Can you believe what I just saw here")
             print("[+] Sent: Can you believe what I just saw here")
 
-            # Wait 3 seconds - CHECK match_active after each second
-            print("[*] Waiting 3 seconds...")
-            for _ in range(3):
-                if not match_active or promo_cancelled:
-                    print("[!] Match ended during believe wait, aborting promo")
-                    return
-                await asyncio.sleep(1)
+            # Wait 3 seconds
+            await asyncio.sleep(3)
 
             # Step 3: Forward sticker
-            if promo_cancelled:
-                print("[!] Promo cancelled before sticker")
-                return
-
             if not match_active:
-                print("[!] Match ended, aborting sticker")
+                print("[!] Match ended, aborting")
                 return
 
             if sticker_msg_id:
@@ -345,48 +172,20 @@ async def send_promo():
                 await safe_send_message(bot_entity, "💜 @chatxbt_bot\nhttps://t.me/chatxbt_bot")
                 print("[+] Text promo sent!")
 
-            # Wait 8 seconds after sticker - CHECK match_active after each second
-            print("[*] Waiting 8 seconds after sticker...")
-            for _ in range(8):
-                if not match_active or promo_cancelled:
-                    print("[!] Match ended during sticker wait, aborting")
-                    return
-                await asyncio.sleep(1)
+            # Wait 8 seconds after sticker
+            await asyncio.sleep(8)
 
             promo_sent = True
-            print("[✓] Promo complete, proceeding to next...")
+            print("[✓] Promo complete")
 
         except Exception as e:
             print(f"[!] Send error: {e}")
             promo_sent = False
 
 
-async def handle_self_match():
-    global match_active, promo_sent, self_match_detected
-    print("[!] Handling self-match skip...")
-    self_match_detected = True
-
-    if sending_lock.locked():
-        global promo_cancelled
-        promo_cancelled = True
-        for _ in range(100):
-            if not sending_lock.locked():
-                break
-            await asyncio.sleep(0.1)
-
-    match_active = False
-    promo_sent = False
-    await asyncio.sleep(1)
-    await force_end_chat()
-    await asyncio.sleep(2)
-    await click_next()
-
-
 @client.on(events.NewMessage(chats='@TalkNGoBot'))
 async def handler(event):
-    global match_active, promo_sent, promo_cancelled, waiting_for_partner
-    global search_timeout_task, stuck_watchdog_task, self_match_detected
-    global match_start_time
+    global match_active, promo_sent
 
     text = event.text or ''
     text_lower = text.lower()
@@ -394,61 +193,32 @@ async def handler(event):
     if event.out:
         return
 
-    # ========== ANTI-SELF-MATCH: Only detect OUR exact promo sequence ==========
-    if match_active and not event.out and not promo_sent:
-        if text_lower == PROMO_TEXT:
-            print("[!] SELF-MATCH DETECTED: Partner sent our exact promo text!")
-            await handle_self_match()
-            return
-
-        if event.message.sticker:
-            print("[!] SELF-MATCH DETECTED: Partner sent sticker before us!")
-            await handle_self_match()
-            return
-
-    # ========== PARTNER LEFT / DISCONNECTED ==========
+    # ========== PARTNER LEFT / DISCONNECTED / ENDED ==========
     if ('partner has left' in text_lower or 
         'partner ended' in text_lower or 
         'partner has disconnected' in text_lower or
         'your partner has disconnected' in text_lower):
-        print("[✓] Partner left/disconnected!")
+        print("[✓] Partner left!")
         match_active = False
         promo_sent = False
-        waiting_for_partner = False
-        self_match_detected = False
-
-        if sending_lock.locked():
-            print("[!] Cancelling promo...")
-            promo_cancelled = True
-            for _ in range(100):
-                if not sending_lock.locked():
-                    break
-                await asyncio.sleep(0.1)
-
         await asyncio.sleep(2)
-        await dismiss_rating()
         await click_next()
         return
 
-    # ========== YOU LEFT THE CHAT ==========
+    # ========== YOU LEFT ==========
     if 'you left' in text_lower:
-        print("[✓] You left the chat")
+        print("[✓] You left")
         match_active = False
         promo_sent = False
-        waiting_for_partner = False
-        self_match_detected = False
         await asyncio.sleep(2)
-        await dismiss_rating()
         await click_next()
         return
 
-    # ========== NOT IN A CHAT ==========
-    if "you're not in a chat" in text_lower or "not in a chat" in text_lower:
-        print("[!] Not in a chat - partner already left")
+    # ========== NOT IN CHAT ==========
+    if "not in a chat" in text_lower:
+        print("[!] Not in chat")
         match_active = False
         promo_sent = False
-        waiting_for_partner = False
-        self_match_detected = False
         await asyncio.sleep(2)
         await click_next()
         return
@@ -458,51 +228,35 @@ async def handler(event):
         print("[+] Match started!")
         match_active = True
         promo_sent = False
-        promo_cancelled = False
-        waiting_for_partner = False
-        self_match_detected = False
-        match_start_time = time.time()
-
-        if search_timeout_task and not search_timeout_task.done():
-            search_timeout_task.cancel()
-
-        stuck_watchdog_task = asyncio.create_task(stuck_watchdog())
 
         await asyncio.sleep(1)
         await send_promo()
 
-        if not promo_cancelled and not self_match_detected and match_active:
+        if match_active:
             await click_next()
         else:
-            print("[!] Promo cancelled, self-match, or match ended")
+            print("[!] Match ended during promo")
             await asyncio.sleep(1)
-            if match_active:
-                await force_end_chat()
-                await asyncio.sleep(2)
             await click_next()
         return
 
     # ========== FINDING PARTNER ==========
-    if 'Waiting for a partner' in text:
+    if 'Waiting for a partner' in text_lower:
         print("[...] Searching...")
         match_active = False
         promo_sent = False
-        waiting_for_partner = True
         return
 
-    # ========== PARTNER SENT MESSAGE DURING MATCH ==========
+    # ========== PARTNER MESSAGED FIRST ==========
     if match_active and not promo_sent and not sending_lock.locked():
         print("[+] Partner messaged first!")
         await send_promo()
 
-        if not promo_cancelled and not self_match_detected and match_active:
+        if match_active:
             await click_next()
         else:
-            print("[!] Promo cancelled, self-match, or match ended")
+            print("[!] Match ended during promo")
             await asyncio.sleep(1)
-            if match_active:
-                await force_end_chat()
-                await asyncio.sleep(2)
             await click_next()
         return
 
@@ -510,9 +264,7 @@ async def handler(event):
 async def main():
     global bot_entity
     await client.start()
-    print(f"[*] ChatBuddy bot (@TalkNGoBot) started! BOT_ID={BOT_ID}")
-    print(f"[*] STAGGER_GAP={STAGGER_GAP}s | MIN_PARTNER_INTERVAL={MIN_PARTNER_INTERVAL}s")
-    print(f"[*] STUCK_TIMEOUT={STUCK_TIMEOUT}s")
+    print("[*] ChatBuddy bot (@TalkNGoBot) started!")
     print("[*] Flow: heyyy → 4s → believe → 3s → sticker → 8s → Next")
     print("[*] Connected to Telegram successfully!")
 
@@ -521,7 +273,6 @@ async def main():
 
     if not msgs_found:
         print("[!] WARNING: Some messages not found in Saved Messages!")
-        print("[!] The bot will use text fallback for missing messages.")
 
     await safe_send_message(bot_entity, '/next')
     await client.run_until_disconnected()
