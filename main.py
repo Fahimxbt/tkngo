@@ -228,10 +228,10 @@ async def send_promo():
 
     async with sending_lock:
         promo_cancelled = False
-        print("[*] Starting forward sequence...")
+        print("[*] Starting promo sequence...")
 
         try:
-            # Step 1: Forward "heyyy" immediately
+            # Step 1: Send "heyyy" immediately
             if promo_cancelled:
                 print("[!] Promo cancelled before heyyy")
                 return
@@ -243,25 +243,21 @@ async def send_promo():
                 await safe_send_message(bot_entity, "heyyy")
                 print("[+] Sent: heyyy")
 
-            # Wait 3 seconds
-            print("[*] Waiting 3 seconds...")
-            await asyncio.sleep(3)
+            # Wait 2 seconds
+            print("[*] Waiting 2 seconds...")
+            await asyncio.sleep(2)
 
-            # Step 2: Forward "F"
+            # Step 2: Send "Can you believe what I just saw here"
             if promo_cancelled:
-                print("[!] Promo cancelled before F")
+                print("[!] Promo cancelled before believe message")
                 return
 
-            if f_msg_id:
-                await safe_forward_messages(bot_entity, f_msg_id, 'me')
-                print("[+] Forwarded: F")
-            else:
-                await safe_send_message(bot_entity, "F")
-                print("[+] Sent: F")
+            await safe_send_message(bot_entity, "Can you believe what I just saw here")
+            print("[+] Sent: Can you believe what I just saw here")
 
-            # Wait 4 seconds
-            print("[*] Waiting 4 seconds...")
-            await asyncio.sleep(4)
+            # Wait 5 seconds (for partner to see sticker)
+            print("[*] Waiting 5 seconds...")
+            await asyncio.sleep(5)
 
             # Step 3: Forward sticker
             if promo_cancelled:
@@ -276,7 +272,7 @@ async def send_promo():
                 print("[+] Text promo sent!")
 
             promo_sent = True
-            print("[✓] Sticker sent, proceeding to next...")
+            print("[✓] Promo complete, proceeding to next...")
 
         except Exception as e:
             print(f"[!] Send error: {e}")
