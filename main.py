@@ -125,6 +125,26 @@ async def dismiss_rating():
     return False
 
 
+async def click_yes_skip():
+    """Click 'Yes, Skip' button if skip confirmation appears."""
+    try:
+        msgs = await client.get_messages(bot_entity, limit=5)
+        for m in msgs:
+            if m.reply_markup and m.reply_markup.rows:
+                for row in m.reply_markup.rows:
+                    for btn in row.buttons:
+                        btn_text = btn.text or ''
+                        if 'yes, skip' in btn_text.lower() or 'skip' in btn_text.lower():
+                            result = await safe_click(m, btn.text)
+                            if result:
+                                print(f"[→] Skip confirmed: {btn_text}")
+                                await asyncio.sleep(2)
+                                return True
+    except Exception as e:
+        print(f"[!] Yes Skip error: {e}")
+    return False
+
+
 async def click_next():
     global match_active, promo_sent, last_partner_time, waiting_for_partner, last_search_start_time, search_timeout_task
 
@@ -167,6 +187,9 @@ async def click_next():
                                 result = await safe_click(m, btn.text)
                                 if result:
                                     print("[→] Next clicked")
+                                    # Wait for skip confirmation and click Yes, Skip
+                                    await asyncio.sleep(2)
+                                    await click_yes_skip()
                                     match_active = False
                                     promo_sent = False
                                     waiting_for_partner = True
@@ -239,9 +262,9 @@ async def send_promo():
                 await safe_send_message(bot_entity, "heyyy")
                 print("[+] Sent: heyyy")
 
-            # Wait 2 seconds
-            print("[*] Waiting 2 seconds...")
-            await asyncio.sleep(2)
+            # Wait 3 seconds
+            print("[*] Waiting 3 seconds...")
+            await asyncio.sleep(3)
 
             # Step 2: Send "Can you believe what I just saw here"
             if promo_cancelled:
@@ -251,9 +274,9 @@ async def send_promo():
             await safe_send_message(bot_entity, "Can you believe what I just saw here")
             print("[+] Sent: Can you believe what I just saw here")
 
-            # Wait 5 seconds (for partner to see sticker)
-            print("[*] Waiting 5 seconds...")
-            await asyncio.sleep(5)
+            # Wait 4 seconds
+            print("[*] Waiting 4 seconds...")
+            await asyncio.sleep(4)
 
             # Step 3: Forward sticker
             if promo_cancelled:
@@ -266,6 +289,10 @@ async def send_promo():
             else:
                 await safe_send_message(bot_entity, "💜 @chatxbt_bot\nhttps://t.me/chatxbt_bot")
                 print("[+] Text promo sent!")
+
+            # Wait 6 seconds before going next
+            print("[*] Waiting 6 seconds...")
+            await asyncio.sleep(6)
 
             promo_sent = True
             print("[✓] Promo complete, proceeding to next...")
