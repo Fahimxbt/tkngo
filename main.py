@@ -28,6 +28,7 @@ promo_sent = False
 sending_lock = asyncio.Lock()
 promo_cancelled = False
 finding_lock = asyncio.Lock()
+waiting_for_partner = False
 
 MIN_PARTNER_INTERVAL = 15
 last_partner_time = 0
@@ -113,13 +114,14 @@ async def click_yes_skip():
 
 
 async def click_next():
-    global match_active, promo_sent, last_partner_time
+    global match_active, promo_sent, last_partner_time, waiting_for_partner
 
     if finding_lock.locked():
         print("[*] Already finding partner, skipping...")
         return True
 
     async with finding_lock:
+        # ANTI-SELF-MATCH: staggered random delay based on BOT_ID
         base_delay = BOT_ID * 1.5
         random_delay = random.uniform(0, 3)
         total_delay = base_delay + random_delay
@@ -151,6 +153,7 @@ async def click_next():
                                     await click_yes_skip()
                                     match_active = False
                                     promo_sent = False
+                                    waiting_for_partner = True
                                     last_partner_time = asyncio.get_event_loop().time()
                                     await asyncio.sleep(3)
                                     return True
@@ -162,6 +165,7 @@ async def click_next():
         print("[→] /next sent")
         match_active = False
         promo_sent = False
+        waiting_for_partner = True
         last_partner_time = asyncio.get_event_loop().time()
         await asyncio.sleep(3)
         return True
@@ -203,7 +207,7 @@ async def send_promo():
 
 @client.on(events.NewMessage(chats='@TalkNGoBot'))
 async def handler(event):
-    global match_active, promo_sent, promo_cancelled
+    global match_active, promo_sent, promo_cancelled, waiting_for_partner
 
     text = event.text or ''
     if event.out:
@@ -214,6 +218,15 @@ async def handler(event):
         print("[!] Skip confirmation detected!")
         await asyncio.sleep(1)
         await click_yes_skip()
+        waiting_for_partner = True
+        return
+
+    # ========== WAITING FOR PARTNER ==========
+    if 'waiting for a partner' in text.lower():
+        print("[...] Waiting for a partner...")
+        match_active = False
+        promo_sent = False
+        waiting_for_partner = True
         return
 
     # ========== PARTNER DISCONNECTED ==========
@@ -221,6 +234,7 @@ async def handler(event):
         print("[✓] Partner disconnected!")
         match_active = False
         promo_sent = False
+        waiting_for_partner = False
 
         if sending_lock.locked():
             promo_cancelled = True
@@ -238,6 +252,7 @@ async def handler(event):
         print("[✓] Chat ended")
         match_active = False
         promo_sent = False
+        waiting_for_partner = False
         await asyncio.sleep(2)
         await click_next()
         return
@@ -248,6 +263,7 @@ async def handler(event):
         match_active = True
         promo_sent = False
         promo_cancelled = False
+        waiting_for_partner = False
 
         await asyncio.sleep(1)
         await send_promo()
@@ -258,13 +274,6 @@ async def handler(event):
             print("[!] Promo cancelled, finding next...")
             await asyncio.sleep(1)
             await click_next()
-        return
-
-    # ========== FINDING PARTNER ==========
-    if 'waiting for a partner' in text.lower():
-        print("[...] Searching...")
-        match_active = False
-        promo_sent = False
         return
 
     # ========== PARTNER SENT MESSAGE DURING MATCH ==========
