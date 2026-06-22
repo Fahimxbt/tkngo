@@ -93,6 +93,25 @@ async def find_promo_message():
     return False
 
 
+async def click_yes_skip():
+    """Handle the 'Are you sure you want to skip?' confirmation dialog."""
+    try:
+        msgs = await client.get_messages(bot_entity, limit=5)
+        for m in msgs:
+            if m.reply_markup and m.reply_markup.rows:
+                for row in m.reply_markup.rows:
+                    for btn in row.buttons:
+                        btn_text = btn.text or ''
+                        if 'yes, skip' in btn_text.lower() or 'skip' in btn_text.lower():
+                            result = await safe_click(m, btn.text)
+                            if result:
+                                print("[→] Yes, Skip clicked")
+                                return True
+    except Exception as e:
+        print(f"[!] Yes Skip error: {e}")
+    return False
+
+
 async def click_next():
     global match_active, promo_sent, last_partner_time
 
@@ -126,6 +145,10 @@ async def click_next():
                                 result = await safe_click(m, btn.text)
                                 if result:
                                     print("[→] Next clicked")
+                                    # Wait a moment to see if skip confirmation appears
+                                    await asyncio.sleep(2)
+                                    # Try to handle skip confirmation
+                                    await click_yes_skip()
                                     match_active = False
                                     promo_sent = False
                                     last_partner_time = asyncio.get_event_loop().time()
@@ -186,6 +209,14 @@ async def handler(event):
     if event.out:
         return
 
+    # ========== SKIP CONFIRMATION DIALOG ==========
+    if 'are you sure you want to skip' in text.lower():
+        print("[!] Skip confirmation detected!")
+        await asyncio.sleep(1)
+        await click_yes_skip()
+        return
+
+    # ========== PARTNER DISCONNECTED ==========
     if 'your partner has disconnected' in text.lower() or 'partner left' in text.lower():
         print("[✓] Partner disconnected!")
         match_active = False
@@ -202,6 +233,7 @@ async def handler(event):
         await click_next()
         return
 
+    # ========== YOU LEFT THE CHAT ==========
     if 'you left' in text.lower() or 'chat ended' in text.lower():
         print("[✓] Chat ended")
         match_active = False
@@ -210,6 +242,7 @@ async def handler(event):
         await click_next()
         return
 
+    # ========== MATCH STARTED ==========
     if 'chat connected' in text.lower():
         print("[+] Match started!")
         match_active = True
@@ -227,12 +260,14 @@ async def handler(event):
             await click_next()
         return
 
+    # ========== FINDING PARTNER ==========
     if 'waiting for a partner' in text.lower():
         print("[...] Searching...")
         match_active = False
         promo_sent = False
         return
 
+    # ========== PARTNER SENT MESSAGE DURING MATCH ==========
     if match_active and not promo_sent and not sending_lock.locked():
         print("[+] Partner messaged first!")
         await send_promo()
