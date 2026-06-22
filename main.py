@@ -23,7 +23,6 @@ client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
 bot_entity = None
 sticker_msg_id = None
 heyyy_msg_id = None
-f_msg_id = None
 
 match_active = False
 promo_sent = False
@@ -84,7 +83,7 @@ async def safe_click(message, text, retries=3):
 
 
 async def find_messages():
-    global sticker_msg_id, heyyy_msg_id, f_msg_id
+    global sticker_msg_id, heyyy_msg_id
     try:
         msgs = await client.get_messages('me', limit=50)
         for m in msgs:
@@ -94,18 +93,15 @@ async def find_messages():
             if m.text and m.text.lower() == 'heyyy' and not heyyy_msg_id:
                 heyyy_msg_id = m.id
                 print("[+] 'heyyy' message found!")
-            if m.text and m.text.upper() == 'F' and not f_msg_id:
-                f_msg_id = m.id
-                print("[+] 'F' message found!")
 
-        if all([sticker_msg_id, heyyy_msg_id, f_msg_id]):
+        if sticker_msg_id and heyyy_msg_id:
             print("[+] All messages found!")
             return True
 
     except Exception as e:
         print(f"[!] Find error: {e}")
 
-    print("[!] Send 'heyyy', 'F', and a sticker to Saved Messages first!")
+    print("[!] Send 'heyyy' and a sticker to Saved Messages first!")
     return False
 
 
@@ -279,7 +275,7 @@ async def send_promo():
             promo_sent = False
 
 
-@client.on(events.NewMessage(chats='@tikible_bot'))
+@client.on(events.NewMessage(chats='@TalkNGoBot'))
 async def handler(event):
     global match_active, promo_sent, promo_cancelled, waiting_for_partner, search_timeout_task
 
@@ -322,7 +318,7 @@ async def handler(event):
         return
 
     # ========== MATCH STARTED ==========
-    if 'Match successful' in text:
+    if 'Chat Connected!' in text:
         print("[+] Match started!")
         match_active = True
         promo_sent = False
@@ -346,7 +342,7 @@ async def handler(event):
         return
 
     # ========== FINDING PARTNER ==========
-    if 'Finding a random partner' in text:
+    if 'Waiting for a partner' in text:
         print("[...] Searching...")
         match_active = False
         promo_sent = False
@@ -370,10 +366,10 @@ async def handler(event):
 async def main():
     global bot_entity
     await client.start()
-    print(f"[*] xbt1-bot (@tikible_bot) started! BOT_ID={BOT_ID}")
+    print(f"[*] ChatBuddy bot (@TalkNGoBot) started! BOT_ID={BOT_ID}")
     print("[*] Connected to Telegram successfully!")
 
-    bot_entity = await client.get_entity('@tikible_bot')
+    bot_entity = await client.get_entity('@TalkNGoBot')
     msgs_found = await find_messages()
 
     if not msgs_found:
