@@ -46,7 +46,6 @@ last_partner_time = 0
 
 # Our exact promo signatures (lowercase for comparison)
 PROMO_TEXT = "can you believe what i just saw here"
-HEYYY_TEXT = "heyyy"
 
 # Stuck detection
 STUCK_TIMEOUT = 90
@@ -103,7 +102,7 @@ async def find_messages():
             if m.sticker and not sticker_msg_id:
                 sticker_msg_id = m.id
                 print("[+] Sticker found!")
-            if m.text and m.text.lower() == HEYYY_TEXT and not heyyy_msg_id:
+            if m.text and m.text.lower() == 'heyyy' and not heyyy_msg_id:
                 heyyy_msg_id = m.id
                 print("[+] 'heyyy' message found!")
 
@@ -302,25 +301,41 @@ async def send_promo():
                 await safe_send_message(bot_entity, "heyyy")
                 print("[+] Sent: heyyy")
 
-            # Wait 4 seconds
+            # Wait 4 seconds - CHECK match_active after each second
             print("[*] Waiting 4 seconds...")
-            await asyncio.sleep(4)
+            for _ in range(4):
+                if not match_active or promo_cancelled:
+                    print("[!] Match ended during heyyy wait, aborting promo")
+                    return
+                await asyncio.sleep(1)
 
             # Step 2: Send "Can you believe what I just saw here"
             if promo_cancelled:
                 print("[!] Promo cancelled before believe message")
                 return
 
+            if not match_active:
+                print("[!] Match ended, aborting promo")
+                return
+
             await safe_send_message(bot_entity, "Can you believe what I just saw here")
             print("[+] Sent: Can you believe what I just saw here")
 
-            # Wait 3 seconds
+            # Wait 3 seconds - CHECK match_active after each second
             print("[*] Waiting 3 seconds...")
-            await asyncio.sleep(3)
+            for _ in range(3):
+                if not match_active or promo_cancelled:
+                    print("[!] Match ended during believe wait, aborting promo")
+                    return
+                await asyncio.sleep(1)
 
             # Step 3: Forward sticker
             if promo_cancelled:
                 print("[!] Promo cancelled before sticker")
+                return
+
+            if not match_active:
+                print("[!] Match ended, aborting sticker")
                 return
 
             if sticker_msg_id:
@@ -330,9 +345,13 @@ async def send_promo():
                 await safe_send_message(bot_entity, "💜 @chatxbt_bot\nhttps://t.me/chatxbt_bot")
                 print("[+] Text promo sent!")
 
-            # Wait 8 seconds after sticker before going next
+            # Wait 8 seconds after sticker - CHECK match_active after each second
             print("[*] Waiting 8 seconds after sticker...")
-            await asyncio.sleep(8)
+            for _ in range(8):
+                if not match_active or promo_cancelled:
+                    print("[!] Match ended during sticker wait, aborting")
+                    return
+                await asyncio.sleep(1)
 
             promo_sent = True
             print("[✓] Promo complete, proceeding to next...")
@@ -376,24 +395,23 @@ async def handler(event):
         return
 
     # ========== ANTI-SELF-MATCH: Only detect OUR exact promo sequence ==========
-    # A random user sending "Heyyyy" or "hi" should NOT trigger this
-    # Only trigger if partner sends the EXACT believe text OR sticker before we send ours
     if match_active and not event.out and not promo_sent:
-        # If partner sends our exact promo text = 100% our bot
         if text_lower == PROMO_TEXT:
             print("[!] SELF-MATCH DETECTED: Partner sent our exact promo text!")
             await handle_self_match()
             return
 
-        # If partner sends sticker before we do = likely our bot
         if event.message.sticker:
             print("[!] SELF-MATCH DETECTED: Partner sent sticker before us!")
             await handle_self_match()
             return
 
-    # ========== PARTNER LEFT THE CHAT ==========
-    if 'partner has left' in text_lower or 'partner ended' in text_lower:
-        print("[✓] Partner left the chat!")
+    # ========== PARTNER LEFT / DISCONNECTED ==========
+    if ('partner has left' in text_lower or 
+        'partner ended' in text_lower or 
+        'partner has disconnected' in text_lower or
+        'your partner has disconnected' in text_lower):
+        print("[✓] Partner left/disconnected!")
         match_active = False
         promo_sent = False
         waiting_for_partner = False
@@ -424,6 +442,17 @@ async def handler(event):
         await click_next()
         return
 
+    # ========== NOT IN A CHAT ==========
+    if "you're not in a chat" in text_lower or "not in a chat" in text_lower:
+        print("[!] Not in a chat - partner already left")
+        match_active = False
+        promo_sent = False
+        waiting_for_partner = False
+        self_match_detected = False
+        await asyncio.sleep(2)
+        await click_next()
+        return
+
     # ========== MATCH STARTED ==========
     if 'Chat Connected!' in text:
         print("[+] Match started!")
@@ -434,22 +463,22 @@ async def handler(event):
         self_match_detected = False
         match_start_time = time.time()
 
-        # Cancel search timeout
         if search_timeout_task and not search_timeout_task.done():
             search_timeout_task.cancel()
 
-        # Start stuck watchdog
         stuck_watchdog_task = asyncio.create_task(stuck_watchdog())
 
-        # Send heyyy IMMEDIATELY - no decoy delay
-        await asyncio.sleep(1)  # Small 1s buffer for bot to stabilize
+        await asyncio.sleep(1)
         await send_promo()
 
-        if not promo_cancelled and not self_match_detected:
+        if not promo_cancelled and not self_match_detected and match_active:
             await click_next()
         else:
-            print("[!] Promo cancelled or self-match, finding next...")
+            print("[!] Promo cancelled, self-match, or match ended")
             await asyncio.sleep(1)
+            if match_active:
+                await force_end_chat()
+                await asyncio.sleep(2)
             await click_next()
         return
 
@@ -466,11 +495,14 @@ async def handler(event):
         print("[+] Partner messaged first!")
         await send_promo()
 
-        if not promo_cancelled and not self_match_detected:
+        if not promo_cancelled and not self_match_detected and match_active:
             await click_next()
         else:
-            print("[!] Promo cancelled or self-match, finding next...")
+            print("[!] Promo cancelled, self-match, or match ended")
             await asyncio.sleep(1)
+            if match_active:
+                await force_end_chat()
+                await asyncio.sleep(2)
             await click_next()
         return
 
@@ -496,11 +528,14 @@ async def main():
 
 
 if __name__ == '__main__':
-    try:
-        with client:
-            client.loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        print("\n[*] Bot stopped by user.")
-    except Exception as e:
-        print(f"[!] Fatal error: {e}")
-        sys.exit(1)
+    while True:
+        try:
+            with client:
+                client.loop.run_until_complete(main())
+        except KeyboardInterrupt:
+            print("\n[*] Bot stopped by user.")
+            break
+        except Exception as e:
+            print(f"[!] Fatal error: {e}")
+            print("[*] Restarting in 10 seconds...")
+            time.sleep(10)
