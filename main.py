@@ -4,6 +4,7 @@ from telethon.errors import FloodWaitError
 import asyncio
 import os
 import time
+import sys  # BUG FIX #1: Added missing import
 
 # ========== CONFIG FROM ENVIRONMENT VARIABLES ==========
 STRING_SESSION = os.environ.get('STRING_SESSION', '')
@@ -25,6 +26,7 @@ heyyy_msg_id = None
 match_active = False
 promo_sent = False
 sending_lock = asyncio.Lock()
+next_pending = False  # BUG FIX #9: Prevent double click_next
 
 
 async def safe_send_message(entity, message, retries=3):
@@ -55,9 +57,12 @@ async def safe_forward_messages(entity, msg_id, from_peer, retries=3):
     return None
 
 
-async def safe_click(message, text, retries=3):
+async def safe_click(message, data=None, text=None, retries=3):
+    """BUG FIX #4: Click by button data or text, avoid double search"""
     for attempt in range(retries):
         try:
+            if data is not None:
+                return await message.click(data=data)
             return await message.click(text=text)
         except FloodWaitError as e:
             print(f"[!] FloodWait on click: Waiting {e.seconds} seconds...")
@@ -84,6 +89,12 @@ async def find_messages():
         if sticker_msg_id and heyyy_msg_id:
             print("[+] All messages found!")
             return True
+        elif sticker_msg_id:
+            print("[!] 'heyyy' message missing in Saved Messages!")
+        elif heyyy_msg_id:
+            print("[!] Sticker missing in Saved Messages!")
+        else:
+            print("[!] Both messages missing!")
 
     except Exception as e:
         print(f"[!] Find error: {e}")
@@ -93,6 +104,12 @@ async def find_messages():
 
 
 async def click_next():
+    global next_pending
+    if next_pending:
+        print("[*] Next already pending, skipping")
+        return False
+    next_pending = True
+    
     print("[*] Looking for Next button...")
     try:
         msgs = await client.get_messages(bot_entity, limit=10)
@@ -101,7 +118,7 @@ async def click_next():
                 for row in m.reply_markup.rows:
                     for btn in row.buttons:
                         if 'Next' in btn.text:
-                            result = await safe_click(m, btn.text)
+                            result = await safe_click(m, text=btn.text)
                             if result:
                                 print("[→] Next clicked")
                                 await asyncio.sleep(2)
@@ -112,11 +129,12 @@ async def click_next():
                                         for row2 in m2.reply_markup.rows:
                                             for btn2 in row2.buttons:
                                                 if 'yes' in btn2.text.lower() and 'skip' in btn2.text.lower():
-                                                    await safe_click(m2, btn2.text)
+                                                    await safe_click(m2, text=btn2.text)
                                                     print(f"[→] Skip confirmed: {btn2.text}")
                                                     await asyncio.sleep(2)
                                                     break
                                 await asyncio.sleep(3)
+                                next_pending = False
                                 return True
     except Exception as e:
         print(f"[!] get_messages error: {e}")
@@ -125,11 +143,12 @@ async def click_next():
     await safe_send_message(bot_entity, '/next')
     print("[→] /next sent")
     await asyncio.sleep(3)
+    next_pending = False
     return True
 
 
 async def send_promo():
-    global promo_sent
+    global promo_sent, match_active
 
     if sending_lock.locked() or promo_sent:
         return
@@ -146,7 +165,6 @@ async def send_promo():
                 await safe_send_message(bot_entity, "heyyy")
                 print("[+] Sent: heyyy")
 
-            # Wait 4 seconds
             await asyncio.sleep(4)
 
             # Step 2: Send "Can you believe what I just saw here"
@@ -157,7 +175,6 @@ async def send_promo():
             await safe_send_message(bot_entity, "Can you believe what I just saw here")
             print("[+] Sent: Can you believe what I just saw here")
 
-            # Wait 3 seconds
             await asyncio.sleep(3)
 
             # Step 3: Forward sticker
@@ -172,20 +189,23 @@ async def send_promo():
                 await safe_send_message(bot_entity, "💜 @chatxbt_bot\nhttps://t.me/chatxbt_bot")
                 print("[+] Text promo sent!")
 
-            # Wait 8 seconds after sticker
+            # BUG FIX #2: Check match_active after 8s sleep too
             await asyncio.sleep(8)
+            if not match_active:
+                print("[!] Match ended during final wait, aborting")
+                return
 
             promo_sent = True
             print("[✓] Promo complete")
 
         except Exception as e:
             print(f"[!] Send error: {e}")
-            promo_sent = False
+            # BUG FIX: Don't set promo_sent on error, allow retry
 
 
 @client.on(events.NewMessage(chats='@TalkNGoBot'))
 async def handler(event):
-    global match_active, promo_sent
+    global match_active, promo_sent, next_pending
 
     text = event.text or ''
     text_lower = text.lower()
@@ -201,6 +221,7 @@ async def handler(event):
         print("[✓] Partner left!")
         match_active = False
         promo_sent = False
+        next_pending = False  # Reset pending state
         await asyncio.sleep(2)
         await click_next()
         return
@@ -210,6 +231,7 @@ async def handler(event):
         print("[✓] You left")
         match_active = False
         promo_sent = False
+        next_pending = False
         await asyncio.sleep(2)
         await click_next()
         return
@@ -219,6 +241,7 @@ async def handler(event):
         print("[!] Not in chat")
         match_active = False
         promo_sent = False
+        next_pending = False
         await asyncio.sleep(2)
         await click_next()
         return
@@ -228,6 +251,7 @@ async def handler(event):
         print("[+] Match started!")
         match_active = True
         promo_sent = False
+        next_pending = False
 
         await asyncio.sleep(1)
         await send_promo()
@@ -245,10 +269,12 @@ async def handler(event):
         print("[...] Searching...")
         match_active = False
         promo_sent = False
+        next_pending = False
         return
 
     # ========== PARTNER MESSAGED FIRST ==========
-    if match_active and not promo_sent and not sending_lock.locked():
+    # BUG FIX: Only trigger if promo hasn't started AND next isn't pending
+    if match_active and not promo_sent and not sending_lock.locked() and not next_pending:
         print("[+] Partner messaged first!")
         await send_promo()
 
